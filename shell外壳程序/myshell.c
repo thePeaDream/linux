@@ -3,7 +3,10 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <string.h>
+#include <assert.h>
 //myshell接收的命令最大长度 —用于存放接收的命令
 #define COMMAND_MAX_LENGTH 1024
 //myshell命令行参数最大个数
@@ -15,11 +18,63 @@ char command[COMMAND_MAX_LENGTH];
 //存放分割出的命令行参数
 char* myargv[ARGVNUM];
 extern char** environ;
-
 //存放用户添加的环境变量，buffer里的每个环境变量用'\0'分割
 char buffer[1024];
 //存放用户添加环境变量的下一个位置
 int POS = 0;
+
+//标志命令是否有重定向
+int redir_status;
+#define NOT_REDIR 0
+#define INPUT_REDIR 1
+#define OUTPUT_REDIR 2
+#define APPEND_REDIR 3
+
+
+//检查用户输入的命令是否有重定向，返回目标文件的起始地址，没有重定向返回NULL
+char* checkRedirect(char* str)
+{
+    assert(str);
+    while(*str != '\0' && *str !='>' && *str != '<')
+    {
+        ++str;
+    }
+    char* ret = NULL;
+    if(*str != '\0')
+    {
+        if(*str == '<')
+        {
+            //输入重定向
+            redir_status = INPUT_REDIR;
+        }
+        else if(*str == '>'&& *(str+1)!='>')
+        {
+            //输出重定向
+            redir_status = OUTPUT_REDIR;
+        }
+        else if(*str == '>'&&*(str+1)=='>')
+        {
+            *str = '\0';
+            str++;
+            //追加重定向
+            redir_status = APPEND_REDIR;
+        }
+        *str = '\0';
+        //找到重定向的文件
+        char* begin = str+1;
+        //跳过空格
+        while(*begin == ' ')
+        {
+            ++begin;
+        }
+        ret = begin;
+    }
+    else
+    {
+        redir_status = NOT_REDIR;
+    }
+    return ret;
+}
 
 //shell运行原理：通过让子进程执行命令，父进程等待&&解析命令
 int main()
@@ -35,6 +90,12 @@ int main()
         if(fgets(command,sizeof(command),stdin) == NULL)
         { continue; }
         command[strlen(command)-1] = '\0';//注意：fgets会读取'\n' ——"ls -a -l\n\0"
+        
+        //ls > a.txt\0
+        //判断命令是否存在重定向,返回要重定向的文件或NULL，无重定向返回空
+        //要让子进程执行的程序进行重定向，所以要在fork()之后让子进程重定向文件
+        char* redirect = checkRedirect(command);
+        
         //3 用strtok分割命令 解析字符串
         myargv[0] = strtok(command,SPLIT);//第一次调用传入原始字符串，如果要继续解析原始字符串，后面传入NULL即可
         int i = 1;
@@ -80,8 +141,33 @@ int main()
         pid_t id = fork();
         if(id == 0)
         {
+             if(redirect!=NULL)
+             {
+                 const char* file = redirect;
+                 int fd;
+                 switch(redir_status)
+                 {
+                     case INPUT_REDIR:
+                         fd = open(file,O_RDONLY);
+                         dup2(fd,0);//本来要从键盘读取，现在从文件中读取
+                         break;
+                     case OUTPUT_REDIR:
+                         fd = open(file,O_WRONLY|O_CREAT|O_TRUNC,0666);
+                         dup2(fd,1);//本来要写到显示器的数据，现在写到对应文件中，将文件描述符表下标为1的内容 改成 下标为fd的内容，都指向新打开的文件
+                         break;
+                     case APPEND_REDIR:
+                         fd = open(file,O_WRONLY|O_CREAT|O_APPEND,0666);
+                         dup2(fd,1);
+                         break;
+                     default:
+                         printf("重定向判断异常！！！\n");
+                         break;
+                 }
+              }
+             
+            
             //子进程
-            printf("让子进程执行:%s\n",myargv[0]);
+            //printf("让子进程执行:%s\n",myargv[0]);
             execvp(myargv[0],myargv);
             exit(5);
         }
