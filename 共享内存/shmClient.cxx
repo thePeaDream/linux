@@ -25,15 +25,20 @@ int main()
    //     sleep(1);
    // }
    // snprintf(addr,SHM_SIZE,"quit");
+
+   int fd = OpenPipe(PIPE_NAME,WRITE);
+
    while(true)
    {
        //从键盘中读到的数据，直接放入共享区中,注意'\n'
        ssize_t r = read(0,shmaddr,SHM_SIZE-1);
        assert(r != 0);
        shmaddr[r-1] = '\0';
-       if(strcmp(shmaddr,"quit") == 0)
-           break;
+       if(strcmp(shmaddr,"quit") == 0) break;
+       //写入成功，唤醒对方
+       Wake(fd);
    }
+   ClosePipe(fd);
     //4 将共享内存和客户端去关联
     shmdt(shmaddr);
     log("detach shm done",DEBUG) << "shmid is " << shmid << endl;
